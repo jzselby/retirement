@@ -78,6 +78,35 @@
 
   .banner{background:rgba(181,84,74,.1);border:1px solid rgba(181,84,74,.4);color:#8C3A32;
     border-radius:7px;padding:11px 15px;margin-bottom:14px;font-size:13.5px;font-weight:500}
+
+  .blend{font-family:var(--mono);font-size:12px;color:var(--ink);background:rgba(62,92,110,.08);
+    border:1px solid var(--nickel);border-radius:5px;padding:9px 11px;margin-top:4px;line-height:1.5}
+  .blend strong{color:var(--terrazzo)}
+
+  .alloc-head{display:flex;justify-content:space-between;font-size:13px;color:var(--ink-soft);margin-bottom:9px}
+  .alloc-head strong{font-family:var(--mono);color:var(--ink);font-size:16px;margin-left:3px}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:3px;
+    background:linear-gradient(90deg,var(--terrazzo),var(--terrazzo-lt));outline:none;cursor:pointer;margin:2px 0 4px}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;
+    border-radius:50%;background:#fff;border:2px solid var(--terrazzo);box-shadow:0 1px 3px rgba(0,0,0,.3);cursor:pointer}
+  input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;
+    border:2px solid var(--terrazzo);box-shadow:0 1px 3px rgba(0,0,0,.3);cursor:pointer}
+  input[type=range]:focus-visible{outline:3px solid var(--terrazzo-fog);outline-offset:4px}
+  details.adv{margin-top:12px;border-top:1px solid var(--nickel)}
+  details.adv summary{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-soft);cursor:pointer;padding:10px 0 2px;list-style:none}
+  details.adv summary::-webkit-details-marker{display:none}
+  details.adv summary::before{content:"▸  ";color:var(--terrazzo)}
+  details.adv[open] summary::before{content:"▾  "}
+  details.adv .field:first-of-type{margin-top:10px}
+
+  .modebar{display:flex;align-items:center;gap:8px;margin-bottom:16px}
+  .modebar .modelabel{font-family:var(--mono);font-size:11px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--ink-soft);margin-right:2px}
+  .modebtn{font-family:var(--sans);font-size:13px;padding:6px 13px;border:1px solid var(--nickel-dk);
+    background:var(--card);color:var(--ink-soft);border-radius:5px;cursor:pointer}
+  .modebtn.on{background:var(--terrazzo);color:#fff;border-color:var(--terrazzo);font-weight:600}
+  .modebtn:focus-visible{outline:3px solid var(--terrazzo-fog);outline-offset:2px}
   button.go{width:100%;font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:.02em;
     padding:13px;border:none;border-radius:5px;background:var(--terrazzo);color:#fff;cursor:pointer;
     transition:background .15s ease}
@@ -140,8 +169,9 @@
   <p class="eyebrow">Early-retirement planning · 10,000 simulated paths</p>
   <h1>Will the plan survive the market?</h1>
   <p>A Monte Carlo simulation of your retirement: it draws a different random sequence of returns
-     for every path, runs the two-account withdrawal strategy year by year, and reports how often
-     the portfolio lasts to the end of the plan. Edit any assumption and re-run.</p>
+     for every path, grows spending and income with inflation, runs the two-account withdrawal
+     strategy year by year, and reports how often the portfolio lasts to the end of the plan.
+     Returns are nominal; flip the results between today's and future dollars.</p>
 </header>
 
 <div class="wrap">
@@ -179,6 +209,12 @@
     </fieldset>
 
     <fieldset>
+      <legend>Mortgage</legend>
+      <div class="field"><label>Monthly payment<span class="hint">P&amp;I only; keep out of base spend</span></label><input id="mortPmt" data-money></div>
+      <div class="field"><label>Paid off at your age<span class="hint">payment stops, spending drops</span></label><input id="mortEnd" data-int></div>
+    </fieldset>
+
+    <fieldset>
       <legend>Social Security</legend>
       <div class="field"><label>Your annual benefit</label><input id="ssz" data-money></div>
       <div class="field"><label>Spouse annual benefit</label><input id="ssw" data-money></div>
@@ -193,9 +229,26 @@
     </fieldset>
 
     <fieldset>
-      <legend>Returns &amp; taxes</legend>
-      <div class="field"><label>Mean real return</label><span class="suffix" data-suffix="%"><input id="mean" data-pct></span></div>
-      <div class="field"><label>Volatility (std dev)</label><span class="suffix" data-suffix="%"><input id="vol" data-pct></span></div>
+      <legend>Portfolio mix</legend>
+      <div class="alloc-head">
+        <span>Stocks <strong id="stockPctLbl">80%</strong></span>
+        <span>Bonds <strong id="bondPctLbl">20%</strong></span>
+      </div>
+      <input type="range" id="stockPct" min="0" max="100" step="5">
+      <div class="blend" id="blendOut"></div>
+      <details class="adv">
+        <summary>Capital-market assumptions</summary>
+        <div class="field"><label>Stock return<span class="hint">nominal, long-run</span></label><span class="suffix" data-suffix="%"><input id="stockRet" data-pct></span></div>
+        <div class="field"><label>Stock volatility</label><span class="suffix" data-suffix="%"><input id="stockVol" data-pct></span></div>
+        <div class="field"><label>Bond return<span class="hint">nominal</span></label><span class="suffix" data-suffix="%"><input id="bondRet" data-pct></span></div>
+        <div class="field"><label>Bond volatility</label><span class="suffix" data-suffix="%"><input id="bondVol" data-pct></span></div>
+        <div class="field"><label>Stock/bond correlation</label><input id="corr"></div>
+      </details>
+    </fieldset>
+
+    <fieldset>
+      <legend>Inflation &amp; taxes</legend>
+      <div class="field"><label>Inflation<span class="hint">grows spending &amp; income</span></label><span class="suffix" data-suffix="%"><input id="infl" data-pct></span></div>
       <div class="field"><label>Effective tax, pre-65</label><span class="suffix" data-suffix="%"><input id="taxPre" data-pct></span></div>
       <div class="field"><label>Effective tax, 65+</label><span class="suffix" data-suffix="%"><input id="taxPost" data-pct></span></div>
     </fieldset>
@@ -229,9 +282,11 @@ const DEFAULTS = {
   k401:1795000, brk:996415,
   c401z:26000, c401w:26000, match:12000, cbrk:72000,
   spend:185000, hc:30000, spend65:-5000,
+  mortPmt:0, mortEnd:65,
   ssz:40000, ssw:40000, ssAge:67,
   incomeAmt:0, incomeStart:56, incomeEnd:65,
-  mean:5, vol:12, taxPre:10, taxPost:15,
+  stockPct:80, stockRet:9.5, stockVol:16, bondRet:4.5, bondVol:5, corr:0.1,
+  infl:3.5, taxPre:10, taxPost:15,
   nsims:10000
 };
 
@@ -247,11 +302,31 @@ function setInputs(v){
     if(el.hasAttribute("data-money")) el.value = Number(v[k]).toLocaleString("en-US");
     else el.value = v[k];
   }
+  updateBlend();
 }
 function readNum(el){ return Number(String(el.value).replace(/[^0-9.\-]/g,"")) || 0; }
+function blended(){
+  const wS = readNum($("stockPct"))/100, wB = 1 - wS;
+  const sR = readNum($("stockRet"))/100, sV = readNum($("stockVol"))/100;
+  const bR = readNum($("bondRet"))/100, bV = readNum($("bondVol"))/100;
+  const corr = readNum($("corr"));
+  const mean = wS*sR + wB*bR;
+  const variance = wS*wS*sV*sV + wB*wB*bV*bV + 2*wS*wB*sV*bV*corr;
+  return { wS, wB, mean, vol:Math.sqrt(Math.max(0,variance)) };
+}
+function updateBlend(){
+  const b = blended();
+  const infl = readNum($("infl"))/100;
+  const real = (1+b.mean)/(1+infl) - 1;
+  $("stockPctLbl").textContent = Math.round(b.wS*100) + "%";
+  $("bondPctLbl").textContent = Math.round(b.wB*100) + "%";
+  $("blendOut").innerHTML = `Blended: <strong>${(b.mean*100).toFixed(1)}%</strong> nominal · ` +
+    `<strong>${(real*100).toFixed(1)}%</strong> real · ${(b.vol*100).toFixed(1)}% volatility`;
+}
 function readInputs(){
   const retireNow = $("retireNow").checked;
   const zachAge = readNum($("zachAge"));
+  const b = blended();
   return {
     zachAge, wifeAge:readNum($("wifeAge")),
     retireAge: retireNow ? zachAge : readNum($("retireAge")),
@@ -261,9 +336,11 @@ function readInputs(){
     c401z:readNum($("c401z")), c401w:readNum($("c401w")),
     match:readNum($("match")), cbrk:readNum($("cbrk")),
     spend:readNum($("spend")), hc:readNum($("hc")), spend65:readNum($("spend65")),
+    mortAnnual:readNum($("mortPmt"))*12, mortEnd:readNum($("mortEnd")),
     ssz:readNum($("ssz")), ssw:readNum($("ssw")), ssAge:readNum($("ssAge")),
     incomeAmt:readNum($("incomeAmt")), incomeStart:readNum($("incomeStart")), incomeEnd:readNum($("incomeEnd")),
-    mean:readNum($("mean"))/100, vol:readNum($("vol"))/100,
+    mean:b.mean, vol:b.vol, wS:b.wS,
+    inflation:readNum($("infl"))/100,
     taxPre:readNum($("taxPre"))/100, taxPost:readNum($("taxPost"))/100,
     nsims:Math.max(500, Math.min(50000, readNum($("nsims"))))
   };
@@ -290,31 +367,36 @@ function makeReturnSampler(mean,vol){
   return ()=> Math.exp(mu + sig*gauss()) - 1;
 }
 
-/* ---------- One simulated lifetime ---------- */
+/* ---------- One simulated lifetime (nominal dollars) ---------- */
 function simulatePath(p, drawReturn, track){
   let k401 = p.k401, brk = p.brk;
   let depletedAge = null;
   const years = p.planEnd - p.zachAge;
+  const infl = p.inflation;
   for(let i=0;i<=years;i++){
     const zAge = p.zachAge + i, wAge = p.wifeAge + i;
-    const r = drawReturn();
+    const r = drawReturn();                 // nominal return
+    const f = Math.pow(1+infl, i);          // inflation factor: today's $ -> year-i nominal $
     const retired = zAge >= p.retireAge;
 
     if(!retired){
-      k401 = k401*(1+r) + p.c401z + p.c401w + p.match;
-      brk  = brk*(1+r)  + p.cbrk;
+      k401 = k401*(1+r) + (p.c401z + p.c401w + p.match)*f;
+      brk  = brk*(1+r)  + p.cbrk*f;
     } else {
       k401 *= (1+r); brk *= (1+r);
-      // spending need in real dollars
+      // spending need, grown to nominal year-i dollars
       let spend = p.spend;
       if(zAge < 65) spend += p.hc;
       if(zAge >= 65) spend += p.spend65;
-      // income
-      // income offsets spending need; remainder is withdrawn from accounts
+      spend *= f;
+      // mortgage P&I is fixed nominal (does NOT inflate); drops off at payoff age
+      if(p.mortAnnual > 0 && zAge < p.mortEnd) spend += p.mortAnnual;
+      // income (SS has a COLA; part-time assumed to keep pace) -> nominal
       let income = 0;
       if(zAge >= p.ssAge) income += p.ssz;
       if(wAge >= p.ssAge) income += p.ssw;
       if(p.incomeAmt > 0 && zAge >= p.incomeStart && zAge <= p.incomeEnd) income += p.incomeAmt;
+      income *= f;
       let net = Math.max(0, spend - income);
       const tax = zAge < 65 ? p.taxPre : p.taxPost;
       let gross = net / (1 - tax);           // gross up for taxes on withdrawals
@@ -327,7 +409,7 @@ function simulatePath(p, drawReturn, track){
       if(k401 < 0){ brk += k401; k401 = 0; }
       if(brk < 0){ k401 += brk; brk = 0; }
     }
-    const nw = k401 + brk;
+    const nw = k401 + brk;                   // nominal net worth
     if(nw <= 0 && depletedAge === null) depletedAge = zAge;
     if(track) track[i].push(nw);
   }
@@ -383,13 +465,36 @@ function verdict(rate){
 
 /* ---------- Render ---------- */
 let lastSim=null;
+let displayMode='today';  // 'today' = inflation-adjusted, 'future' = nominal
+
+// Convert stored nominal arrays to the chosen display basis.
+// Dividing by a positive per-year factor preserves order, so percentiles stay valid.
+function buildView(sim){
+  if(displayMode==='future') return { perYear:sim.perYear, finals:sim.finals };
+  const infl=sim.p.inflation, n=sim.years;
+  const perYear = sim.perYear.map((arr,i)=>{ const d=Math.pow(1+infl,i); return arr.map(v=>v/d); });
+  const finals = sim.finals.map(v=>v/Math.pow(1+infl,n));
+  return { perYear, finals };
+}
+
 function render(sim){
   lastSim=sim;
-  const {p, success, medDepletion, finals} = sim;
+  sim._view = buildView(sim);
+  const {p, success, medDepletion} = sim;
+  const finals = sim._view.finals;
   const v = verdict(success);
   const med = pctile(finals,0.5), p10 = pctile(finals,0.10), p90 = pctile(finals,0.90);
+  const unit = displayMode==='today' ? "today's dollars" : "future (nominal) dollars";
+  const real = (1+p.mean)/(1+p.inflation)-1;
+  const assume = `${(p.mean*100).toFixed(1)}% nominal · ${(real*100).toFixed(1)}% real · `+
+                 `${(p.vol*100).toFixed(1)}% vol · ${(p.inflation*100).toFixed(1)}% inflation`;
 
   $("results").innerHTML = `
+    <div class="modebar">
+      <span class="modelabel">Show in</span>
+      <button class="modebtn ${displayMode==='today'?'on':''}" data-mode="today">Today's dollars</button>
+      <button class="modebtn ${displayMode==='future'?'on':''}" data-mode="future">Future dollars</button>
+    </div>
     ${p.retireNow ? `<div class="banner">Scenario: <strong>retire now</strong> — both stop working at age ${p.zachAge}, this year.</div>` : ``}
     <div class="verdict" style="border-left-color:${v.color}">
       <div class="prob" style="color:${v.color}">${(success*100).toFixed(1)}%
@@ -397,7 +502,7 @@ function render(sim){
       <div>
         <div class="band" style="color:${v.color}">${v.band}</div>
         <div style="font-family:var(--mono);font-size:12px;color:var(--ink-soft)">
-          ${p.nsims.toLocaleString()} simulated paths</div>
+          ${p.nsims.toLocaleString()} paths · ${assume}</div>
       </div>
       <p class="say">${v.say}</p>
     </div>
@@ -411,7 +516,7 @@ function render(sim){
 
     <div class="chart-card">
       <h3>Portfolio value across retirement</h3>
-      <p class="sub">Shaded bands show the spread of outcomes by age. Dashed lines mark retirement, Medicare (65), and Social Security.</p>
+      <p class="sub">In ${unit}. Shaded bands show the spread of outcomes by age. Dashed lines mark retirement, Medicare (65), and Social Security.</p>
       <canvas id="fan" height="340"></canvas>
       <div class="legend">
         <span><i style="background:var(--terrazzo-fog)"></i>10th–90th percentile</span>
@@ -422,12 +527,12 @@ function render(sim){
 
     <div class="chart-card">
       <h3>Where the money lands at the end</h3>
-      <p class="sub">Distribution of portfolio value at age ${p.planEnd}. The leftmost bar counts paths that ran out.</p>
+      <p class="sub">Distribution of portfolio value at age ${p.planEnd}, in ${unit}. The leftmost bar counts paths that ran out.</p>
       <canvas id="hist" height="260"></canvas>
     </div>
 
     <table class="pctile">
-      <caption>Ending balance by percentile</caption>
+      <caption>Ending balance by percentile <span style="font-weight:400;font-size:12px;color:var(--ink-soft)">(${unit})</span></caption>
       <thead><tr><th>Outcome</th><th>Percentile</th><th>Portfolio at ${p.planEnd}</th></tr></thead>
       <tbody>
         <tr><td>Poor</td><td>10th</td><td>${fmt0(pctile(finals,0.10))}</td></tr>
@@ -438,12 +543,18 @@ function render(sim){
       </tbody>
     </table>
 
-    <p class="note">Returns are <strong>real</strong> (already net of inflation), drawn each year from a
-      log-normal distribution with the mean and volatility you set, independently across years.
-      Withdrawals are grossed up for taxes and pull <code>brokerage first before 60</code>, then
-      <code>401(k) first from 60+</code>. This captures sequence-of-returns risk but not fat tails,
-      serial correlation, or RMDs — treat it as a planning aid, not a guarantee.</p>
+    <p class="note">Returns are <strong>nominal</strong>, drawn each year from a log-normal distribution
+      with the blended mean and volatility implied by your stock/bond mix, independently across years.
+      Spending and income (including Social Security and part-time work) grow with inflation each year.
+      A mortgage payment, if entered, is held flat in nominal dollars and drops off at payoff — so its
+      real burden shrinks over time. Withdrawals are grossed up for taxes and pull <code>brokerage first before 60</code>, then
+      <code>401(k) first from 60+</code>. Results display in today's or future dollars via the toggle.
+      This captures sequence-of-returns risk but not fat tails, serial correlation, RMDs, or
+      non-inflating income streams — treat it as a planning aid, not a guarantee.</p>
   `;
+  document.querySelectorAll(".modebtn").forEach(btn=>btn.addEventListener("click",()=>{
+    displayMode = btn.dataset.mode; render(lastSim);
+  }));
   drawFan(sim); drawHist(sim);
 }
 
@@ -462,12 +573,13 @@ function drawFan(sim){
   const c=$("fan"); if(!c) return;
   const {ctx,W,H}=setupCanvas(c,340);
   const p=sim.p, n=sim.years;
+  const perYear=sim._view.perYear;
   const padL=58, padR=14, padT=14, padB=28;
   const plotW=W-padL-padR, plotH=H-padT-padB;
 
   const bands=[[0.10,0.90],[0.25,0.75]];
   let maxV=0;
-  for(let i=0;i<=n;i++) maxV=Math.max(maxV, pctile(sim.perYear[i],0.90));
+  for(let i=0;i<=n;i++) maxV=Math.max(maxV, pctile(perYear[i],0.90));
   maxV=niceMax(maxV||1);
 
   const x=i=> padL + (i/n)*plotW;
@@ -495,19 +607,20 @@ function drawFan(sim){
   const bandColors=[getCss('--terrazzo-fog'), getCss('--terrazzo-lt')];
   bands.forEach((b,bi)=>{
     ctx.beginPath();
-    for(let i=0;i<=n;i++){ const yy=y(pctile(sim.perYear[i],b[1])); i?ctx.lineTo(x(i),yy):ctx.moveTo(x(i),yy); }
-    for(let i=n;i>=0;i--){ ctx.lineTo(x(i), y(pctile(sim.perYear[i],b[0]))); }
+    for(let i=0;i<=n;i++){ const yy=y(pctile(perYear[i],b[1])); i?ctx.lineTo(x(i),yy):ctx.moveTo(x(i),yy); }
+    for(let i=n;i>=0;i--){ ctx.lineTo(x(i), y(pctile(perYear[i],b[0]))); }
     ctx.closePath(); ctx.fillStyle=bandColors[bi]; ctx.globalAlpha=bi?0.55:0.5; ctx.fill();
     ctx.globalAlpha=1;
   });
 
   // median line
   ctx.beginPath(); ctx.lineWidth=2.4; ctx.strokeStyle=getCss('--terrazzo');
-  for(let i=0;i<=n;i++){ const yy=y(pctile(sim.perYear[i],0.5)); i?ctx.lineTo(x(i),yy):ctx.moveTo(x(i),yy); }
+  for(let i=0;i<=n;i++){ const yy=y(pctile(perYear[i],0.5)); i?ctx.lineTo(x(i),yy):ctx.moveTo(x(i),yy); }
   ctx.stroke();
 
   // event markers
   const marks=[[p.retireAge,"Retire"],[65,"65"],[p.ssAge,"SS"]];
+  if(p.mortAnnual>0 && p.mortEnd>p.retireAge) marks.push([p.mortEnd,"Payoff"]);
   ctx.setLineDash([4,4]); ctx.lineWidth=1; ctx.font="10px ui-monospace,Menlo,monospace";
   marks.forEach(m=>{
     const i=m[0]-p.zachAge; if(i<0||i>n) return;
@@ -523,7 +636,7 @@ function drawFan(sim){
 function drawHist(sim){
   const c=$("hist"); if(!c) return;
   const {ctx,W,H}=setupCanvas(c,260);
-  const finals=sim.finals, p=sim.p;
+  const finals=sim._view.finals, p=sim.p;
   const padL=58,padR=14,padT=12,padB=28, plotW=W-padL-padR, plotH=H-padT-padB;
 
   const nb=24;
@@ -587,6 +700,11 @@ $("retireNow").addEventListener("change", e=>{
   $("retireAge").disabled = e.target.checked;
   $("retireAge").style.opacity = e.target.checked ? .45 : 1;
   run();
+});
+
+// Live blended-return readout as the mix changes
+["stockPct","stockRet","stockVol","bondRet","bondVol","corr","infl"].forEach(id=>{
+  $(id).addEventListener("input", updateBlend);
 });
 
 let rT;
