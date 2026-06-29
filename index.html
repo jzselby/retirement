@@ -116,6 +116,15 @@
   .reset{display:block;width:100%;text-align:center;margin-top:9px;background:none;border:none;
     font-size:12.5px;color:var(--ink-soft);text-decoration:underline;cursor:pointer}
 
+  .run-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:9px}
+  .run-actions button{font-family:var(--sans);font-size:13px;padding:8px 6px;border:1px solid var(--nickel-dk);
+    background:var(--card);color:var(--ink);border-radius:5px;cursor:pointer}
+  .run-actions button:hover{border-color:var(--terrazzo);color:var(--terrazzo)}
+  .run-actions button:focus-visible{outline:3px solid var(--terrazzo-fog);outline-offset:2px}
+  .toast{min-height:16px;text-align:center;font-size:12px;color:var(--sage);margin-top:7px;
+    opacity:0;transition:opacity .2s ease}
+  .toast.show{opacity:1}
+
   /* ---------- Results ---------- */
   .results{padding:24px 28px 56px;min-width:0}
   .verdict{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-end;
@@ -166,12 +175,9 @@
 <body>
 
 <header class="masthead">
-  <p class="eyebrow">Early-retirement planning · 10,000 simulated paths</p>
-  <h1>Will the plan survive the market?</h1>
-  <p>A Monte Carlo simulation of your retirement: it draws a different random sequence of returns
-     for every path, grows spending and income with inflation, runs the two-account withdrawal
-     strategy year by year, and reports how often the portfolio lasts to the end of the plan.
-     Returns are nominal; flip the results between today's and future dollars.</p>
+  <p class="eyebrow">Retirement planning · 10,000 simulated paths</p>
+  <h1>Retirement scenario modeling</h1>
+  <p></p>
 </header>
 
 <div class="wrap">
@@ -212,6 +218,21 @@
       <legend>Mortgage</legend>
       <div class="field"><label>Monthly payment<span class="hint">P&amp;I only; keep out of base spend</span></label><input id="mortPmt" data-money></div>
       <div class="field"><label>Paid off at your age<span class="hint">payment stops, spending drops</span></label><input id="mortEnd" data-int></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Spending strategy</legend>
+      <label class="switch" for="guard">
+        <input type="checkbox" id="guard">
+        <span class="track"><span class="thumb"></span></span>
+        <span class="switch-label">Dynamic spending (guardrails)<span class="hint">trim spending after bad years, raise it after good ones</span></span>
+      </label>
+      <details class="adv">
+        <summary>Guardrail settings</summary>
+        <div class="field"><label>Trigger band<span class="hint">adjust when rate moves ±this</span></label><span class="suffix" data-suffix="%"><input id="guardBand" data-pct></span></div>
+        <div class="field"><label>Adjustment size</label><span class="suffix" data-suffix="%"><input id="guardStep" data-pct></span></div>
+        <div class="field"><label>Max spending cut<span class="hint">floor on discretionary</span></label><span class="suffix" data-suffix="%"><input id="guardMaxCut" data-pct></span></div>
+      </details>
     </fieldset>
 
     <fieldset>
@@ -265,7 +286,12 @@
         <span class="switch-label">What if we retired now?<span class="hint">overrides retirement age to your current age</span></span>
       </label>
       <button class="go" id="runBtn">Run simulation</button>
-      <button class="reset" id="resetBtn" type="button">Reset to model defaults</button>
+      <div class="run-actions">
+        <button type="button" id="saveBtn">Save</button>
+        <button type="button" id="shareBtn">Copy link</button>
+        <button type="button" id="resetBtn">Clear</button>
+      </div>
+      <div class="toast" id="toast" aria-live="polite"></div>
     </div>
   </section>
 
@@ -276,17 +302,20 @@
 <script>
 "use strict";
 
-/* ---------- Defaults (from the retirement model we built) ---------- */
+/* ---------- Defaults ----------
+   Personal fields start blank (0) so anyone can fill in their own numbers.
+   Engine + structural assumptions keep sensible defaults. */
 const DEFAULTS = {
-  zachAge:48, wifeAge:46, retireAge:56, planEnd:95,
-  k401:1795000, brk:996415,
-  c401z:26000, c401w:26000, match:12000, cbrk:72000,
-  spend:120000, hc:30000, spend65:-5000,
-  mortPmt:5600, mortEnd:76,
-  ssz:40000, ssw:40000, ssAge:67,
-  incomeAmt:0, incomeStart:56, incomeEnd:65,
+  zachAge:0, wifeAge:0, retireAge:0, planEnd:95,
+  k401:0, brk:0,
+  c401z:0, c401w:0, match:0, cbrk:0,
+  spend:0, hc:0, spend65:0,
+  mortPmt:0, mortEnd:65,
+  ssz:0, ssw:0, ssAge:67,
+  incomeAmt:0, incomeStart:60, incomeEnd:65,
   stockPct:80, stockRet:9.5, stockVol:16, bondRet:4.5, bondVol:5, corr:0.1,
   infl:3.5, taxPre:10, taxPost:15,
+  guardBand:20, guardStep:10, guardMaxCut:25,
   nsims:10000
 };
 
@@ -342,6 +371,11 @@ function readInputs(){
     mean:b.mean, vol:b.vol, wS:b.wS,
     inflation:readNum($("infl"))/100,
     taxPre:readNum($("taxPre"))/100, taxPost:readNum($("taxPost"))/100,
+    guard: $("guard").checked,
+    guardBand: readNum($("guardBand"))/100,
+    guardStep: readNum($("guardStep"))/100,
+    gmFloor: 1 - readNum($("guardMaxCut"))/100,
+    gmCeil: 1.5,
     nsims:Math.max(500, Math.min(50000, readNum($("nsims"))))
   };
 }
@@ -367,16 +401,34 @@ function makeReturnSampler(mean,vol){
   return ()=> Math.exp(mu + sig*gauss()) - 1;
 }
 
-/* ---------- One simulated lifetime (nominal dollars) ---------- */
-function simulatePath(p, drawReturn, track){
+/* ---------- Historical annual data (nominal %, 1928–2025) ----------
+   S&P 500 total return and 10-yr US T.Bond total return are the authoritative
+   Damodaran "Historical Returns on Stocks, Bonds and Bills" series (NYU Stern,
+   updated Jan 2026). Inflation is annual US CPI. Source linked in the results. */
+const HIST_START = 1928;
+const HIST = {
+  stock:[43.81,-8.30,-25.12,-43.84,-8.64,49.98,-1.19,46.74,31.94,-35.34,29.28,-1.10,-10.67,-12.77,19.17,25.06,19.03,35.82,-8.43,5.20,5.70,18.30,30.81,23.68,18.15,-1.21,52.56,32.60,7.44,-10.46,43.72,12.06,0.34,26.64,-8.81,22.61,16.42,12.40,-9.97,23.80,10.81,-8.24,3.56,14.22,18.76,-14.31,-25.90,37.00,23.83,-6.98,6.51,18.52,31.74,-4.70,20.42,22.34,6.15,31.24,18.49,5.81,16.54,31.48,-3.06,30.23,7.49,9.97,1.33,37.20,22.68,33.10,28.34,20.89,-9.03,-11.85,-21.97,28.36,10.74,4.83,15.61,5.48,-36.55,25.94,14.82,2.10,15.89,32.15,13.52,1.38,11.77,21.61,-4.23,31.21,18.02,28.47,-18.04,26.06,24.88,17.78],
+  bond:[0.84,4.20,4.54,-2.56,8.79,1.86,7.96,4.47,5.02,1.38,4.21,4.41,5.40,-2.02,2.29,2.49,2.58,3.80,3.13,0.92,1.95,4.66,0.43,-0.30,2.27,4.14,3.29,-1.34,-2.26,6.80,-2.10,-2.65,11.64,2.06,5.69,1.68,3.73,0.72,2.91,-1.58,3.27,-5.01,16.75,9.79,2.82,3.66,1.99,3.61,15.98,1.29,-0.78,0.67,-2.99,8.20,32.81,3.20,13.73,25.71,24.28,-4.96,8.22,17.69,6.24,15.00,9.36,14.21,-8.04,23.48,1.43,9.94,14.92,-8.25,16.66,5.57,15.12,0.38,4.49,2.87,1.96,10.21,20.10,-11.12,8.46,16.04,2.97,-9.10,10.75,1.28,0.69,2.80,-0.02,9.64,11.33,-4.42,-17.83,3.88,-1.64,7.80],
+  cpi:[-1.15,0.00,-2.67,-8.93,-10.30,-5.19,3.50,2.56,1.46,3.60,-2.08,-1.42,0.72,9.93,9.03,2.96,2.30,2.25,18.13,8.84,2.99,-2.07,5.93,6.00,0.75,0.75,-0.74,0.37,2.99,2.90,1.76,1.73,1.36,0.67,1.33,1.64,0.97,1.92,3.46,3.04,4.72,6.20,5.57,3.27,3.41,8.71,12.34,6.94,4.86,6.70,9.02,13.29,12.52,8.92,3.83,3.79,3.95,3.80,1.10,4.43,4.42,4.65,6.11,3.06,2.90,2.75,2.67,2.54,3.32,1.70,1.61,2.68,3.39,1.55,2.38,1.88,3.26,3.42,2.54,4.08,0.09,2.72,1.50,2.96,1.74,1.50,0.76,0.73,2.07,2.11,1.91,2.29,1.36,7.04,6.45,3.35,2.89,2.90]
+};
+function histReturn(idx, wS){ return wS*HIST.stock[idx]/100 + (1-wS)*HIST.bond[idx]/100; }
+
+/* ---------- One simulated lifetime (nominal dollars) ----------
+   getRet(i)  -> nominal portfolio return for year i
+   getInfl(i) -> inflation rate applied across year i
+   Works for Monte Carlo (random getRet, constant getInfl) and historical
+   (getRet/getInfl indexed into the dataset). Guardrails flex discretionary spend. */
+function simulatePath(p, years, getRet, getInfl, track){
   let k401 = p.k401, brk = p.brk;
   let depletedAge = null;
-  const years = p.planEnd - p.zachAge;
-  const infl = p.inflation;
+  let f = 1;             // cumulative inflation: today's $ -> year-i nominal $
+  let lastF = 1;         // f during the final year (to deflate ending balance)
+  let gm = 1;            // guardrail spending multiplier on discretionary spend
+  let initRate = null;   // initial withdrawal rate at retirement (for guardrails)
+
   for(let i=0;i<=years;i++){
     const zAge = p.zachAge + i, wAge = p.wifeAge + i;
-    const r = drawReturn();                 // nominal return
-    const f = Math.pow(1+infl, i);          // inflation factor: today's $ -> year-i nominal $
+    const r = getRet(i);
     const retired = zAge >= p.retireAge;
 
     if(!retired){
@@ -384,14 +436,14 @@ function simulatePath(p, drawReturn, track){
       brk  = brk*(1+r)  + p.cbrk*f;
     } else {
       k401 *= (1+r); brk *= (1+r);
-      // spending need, grown to nominal year-i dollars
-      let spend = p.spend;
-      if(zAge < 65) spend += p.hc;
-      if(zAge >= 65) spend += p.spend65;
-      spend *= f;
-      // mortgage P&I is fixed nominal (does NOT inflate); drops off at payoff age
-      if(p.mortAnnual > 0 && zAge < p.mortEnd) spend += p.mortAnnual;
-      // income (SS has a COLA; part-time assumed to keep pace) -> nominal
+      // discretionary lifestyle spend (subject to guardrails)
+      let disc = p.spend;
+      if(zAge >= 65) disc += p.spend65;
+      let spend = disc * gm * f;
+      // essential add-ons (not flexed by guardrails)
+      if(zAge < 65) spend += p.hc * f;                               // ACA bridge (inflates)
+      if(p.mortAnnual > 0 && zAge < p.mortEnd) spend += p.mortAnnual; // mortgage: fixed nominal
+      // income offsets (inflate with COLA / wage growth)
       let income = 0;
       if(zAge >= p.ssAge) income += p.ssz;
       if(wAge >= p.ssAge) income += p.ssw;
@@ -399,7 +451,15 @@ function simulatePath(p, drawReturn, track){
       income *= f;
       let net = Math.max(0, spend - income);
       const tax = zAge < 65 ? p.taxPre : p.taxPost;
-      let gross = net / (1 - tax);           // gross up for taxes on withdrawals
+      let gross = net / (1 - tax);
+      // guardrails: react to this year's withdrawal rate, adjust next year's discretionary
+      if(p.guard){
+        const portPre = k401 + brk;                 // after growth, before withdrawal
+        const rate = portPre > 0 ? gross/portPre : 99;
+        if(initRate === null) initRate = rate;
+        else if(rate > initRate*(1+p.guardBand)) gm = Math.max(p.gmFloor, gm*(1-p.guardStep));
+        else if(rate < initRate*(1-p.guardBand)) gm = Math.min(p.gmCeil, gm*(1+p.guardStep));
+      }
       // two-account strategy: brokerage first pre-60, 401k first post-60
       if(zAge < 60){
         const fromBrk = Math.min(brk, gross); brk -= fromBrk; k401 -= (gross - fromBrk);
@@ -409,11 +469,14 @@ function simulatePath(p, drawReturn, track){
       if(k401 < 0){ brk += k401; k401 = 0; }
       if(brk < 0){ k401 += brk; brk = 0; }
     }
-    const nw = k401 + brk;                   // nominal net worth
+    const nw = k401 + brk;
     if(nw <= 0 && depletedAge === null) depletedAge = zAge;
     if(track) track[i].push(nw);
+    lastF = f;
+    f *= (1 + getInfl(i));
   }
-  return { finalNW: Math.max(0,k401+brk), depletedAge };
+  const finalNW = Math.max(0, k401+brk);
+  return { finalNW, finalReal: finalNW/lastF, depletedAge };
 }
 
 /* ---------- Percentile of a sorted array ---------- */
@@ -427,13 +490,14 @@ function pctile(sorted, q){
 /* ---------- Run all paths ---------- */
 function runSim(p){
   const drawReturn = makeReturnSampler(p.mean, p.vol);
+  const constInfl = ()=>p.inflation;
   const years = p.planEnd - p.zachAge;
   const perYear = Array.from({length:years+1},()=>[]);
   const finals = new Float64Array(p.nsims);
   let survived = 0; const depletionAges = [];
 
   for(let s=0;s<p.nsims;s++){
-    const res = simulatePath(p, drawReturn, perYear);
+    const res = simulatePath(p, years, drawReturn, constInfl, perYear);
     finals[s] = res.finalNW;
     if(res.depletedAge === null) survived++;
     else depletionAges.push(res.depletedAge);
@@ -447,7 +511,33 @@ function runSim(p){
     success: survived / p.nsims,
     medDepletion: depletionAges.length ? pctile(depletionAges,0.5) : null,
     finals: finalSorted,
-    perYear
+    perYear,
+    hist: runHistorical(p, years)
+  };
+}
+
+/* ---------- Historical backtest: every full start-period in the dataset ---------- */
+function runHistorical(p, years){
+  const maxStartIdx = HIST.stock.length - 1 - years;
+  if(maxStartIdx < 0) return { ok:false };
+  let survived = 0, n = 0;
+  const finalsReal = [];
+  let worst = { real: Infinity };
+  for(let si=0; si<=maxStartIdx; si++){
+    const getRet  = i => histReturn(si+i, p.wS);
+    const getInfl = i => HIST.cpi[si+i]/100;
+    const res = simulatePath(p, years, getRet, getInfl, null);
+    n++;
+    if(res.depletedAge === null) survived++;
+    finalsReal.push(res.finalReal);
+    if(res.finalReal < worst.real)
+      worst = { real: res.finalReal, year: HIST_START+si, dep: res.depletedAge };
+  }
+  finalsReal.sort((a,b)=>a-b);
+  return {
+    ok:true, success: survived/n, n, worst,
+    p10: pctile(finalsReal,0.10), median: pctile(finalsReal,0.50), p90: pctile(finalsReal,0.90),
+    startFirst: HIST_START, startLast: HIST_START+maxStartIdx
   };
 }
 
@@ -502,7 +592,7 @@ function render(sim){
       <div>
         <div class="band" style="color:${v.color}">${v.band}</div>
         <div style="font-family:var(--mono);font-size:12px;color:var(--ink-soft)">
-          ${p.nsims.toLocaleString()} paths · ${assume}</div>
+          ${p.nsims.toLocaleString()} Monte Carlo paths · ${assume}${p.guard?' · <span style="color:var(--terrazzo)">guardrails on</span>':''}</div>
       </div>
       <p class="say">${v.say}</p>
     </div>
@@ -513,6 +603,30 @@ function render(sim){
       <div class="stat"><div class="k">90th percentile</div><div class="v">${fmtM(p90)}</div></div>
       <div class="stat"><div class="k">Median depletion age</div><div class="v">${medDepletion?Math.round(medDepletion):"—"}</div></div>
     </div>
+
+    ${(()=>{
+      const h=sim.hist;
+      if(!h.ok) return `<div class="chart-card"><h3>Cross-check: historical backtest</h3>
+        <p class="sub">Your ${sim.years}-year horizon is longer than the dataset covers, so no full historical periods are available to test.</p></div>`;
+      const w=h.worst;
+      const worstTxt = w.dep ? `retiring in ${w.year} ran out at age ${Math.round(w.dep)}`
+                             : `the leanest case was retiring in ${w.year}`;
+      return `<div class="chart-card">
+        <h3>Cross-check: historical backtest</h3>
+        <p class="sub">The same plan run through every actual ${sim.years}-year sequence since ${h.startFirst}
+          — ${h.n} overlapping periods (${h.startFirst}–${h.startLast} starts). Uses real historical returns
+          <em>and</em> inflation, so it carries the crashes, clustering and 1970s stagflation that random draws miss;
+          your inflation input doesn't apply here. Endings in today's dollars.${p.guard?' Guardrails on.':''}
+          Data: <a href="https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/histretSP.html" target="_blank" rel="noopener" style="color:var(--terrazzo)">Damodaran, NYU Stern</a> (1928–2025).</p>
+        <div class="stat-row" style="margin-top:4px">
+          <div class="stat"><div class="k">Periods survived</div><div class="v" style="color:${verdict(h.success).color}">${(h.success*100).toFixed(0)}%</div></div>
+          <div class="stat"><div class="k">Worst start year</div><div class="v" style="font-size:16px">${w.year}</div></div>
+          <div class="stat"><div class="k">Median ending</div><div class="v">${fmtM(h.median)}</div></div>
+          <div class="stat"><div class="k">Worst ending</div><div class="v" style="color:${w.real<=0?'var(--brick)':'inherit'}">${fmtM(w.real)}</div></div>
+        </div>
+        <p class="sub" style="margin:10px 0 0">Toughest case: ${worstTxt}.</p>
+      </div>`;
+    })()}
 
     <div class="chart-card">
       <h3>Portfolio value across retirement</h3>
@@ -548,8 +662,11 @@ function render(sim){
       Spending and income (including Social Security and part-time work) grow with inflation each year.
       A mortgage payment, if entered, is held flat in nominal dollars and drops off at payoff — so its
       real burden shrinks over time. Withdrawals are grossed up for taxes and pull <code>brokerage first before 60</code>, then
-      <code>401(k) first from 60+</code>. Results display in today's or future dollars via the toggle.
-      This captures sequence-of-returns risk but not fat tails, serial correlation, RMDs, or
+      <code>401(k) first from 60+</code>. With <strong>guardrails</strong> on, discretionary spending is trimmed
+      after the withdrawal rate runs hot and raised after it runs cool, within your max-cut floor. The
+      <strong>historical backtest</strong> replays every actual market sequence in the 1928–2024 dataset instead of
+      drawing returns at random. Results display in today's or future dollars via the toggle.
+      This captures sequence-of-returns risk but not fat tails beyond history, RMDs, or
       non-inflating income streams — treat it as a planning aid, not a guarantee.</p>
   `;
   document.querySelectorAll(".modebtn").forEach(btn=>btn.addEventListener("click",()=>{
@@ -677,11 +794,19 @@ function drawHist(sim){
 function getCss(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
 /* ---------- Run flow ---------- */
+function emptyState(){
+  $("results").innerHTML =
+    '<div class="verdict" style="border-left-color:var(--terrazzo-lt)">'+
+    '<p class="say" style="flex-basis:100%">Fill in your details on the left — at minimum your current age, '+
+    'retirement age, balances and annual spending — then press <strong>Run simulation</strong>. '+
+    'Nothing is shared or stored unless you choose <em>Save</em> or <em>Copy link</em>.</p></div>';
+}
 function run(){
   const btn=$("runBtn"); btn.disabled=true; btn.textContent="Running…";
-  // let the UI paint the disabled state before the (synchronous) crunch
   setTimeout(()=>{
     const p=readInputs();
+    const incomplete = p.zachAge<=0 || p.retireAge<=0 || p.spend<=0;
+    if(incomplete){ emptyState(); btn.disabled=false; btn.textContent="Run simulation"; return; }
     if(p.retireAge<p.zachAge || p.planEnd<=p.retireAge){
       $("results").innerHTML='<div class="verdict" style="border-left-color:var(--brick)">'+
         '<p class="say" style="flex-basis:100%">Check the ages: retirement age must be at or after your current age, '+
@@ -695,25 +820,78 @@ function run(){
 
 $("runBtn").addEventListener("click", run);
 $("resetBtn").addEventListener("click", ()=>{ $("retireNow").checked=false; $("retireAge").disabled=false;
-  $("retireAge").style.opacity=1; setInputs(DEFAULTS); run(); });
+  $("retireAge").style.opacity=1; $("guard").checked=false; setInputs(DEFAULTS); emptyState();
+  flash("Cleared"); });
 $("retireNow").addEventListener("change", e=>{
   $("retireAge").disabled = e.target.checked;
   $("retireAge").style.opacity = e.target.checked ? .45 : 1;
   run();
 });
+$("guard").addEventListener("change", run);
 
 // Live blended-return readout as the mix changes
 ["stockPct","stockRet","stockVol","bondRet","bondVol","corr","infl"].forEach(id=>{
   $(id).addEventListener("input", updateBlend);
 });
 
+/* ---------- Save / share / load ---------- */
+const STORE_KEY = "retirement_mc_v1";
+const FIELD_IDS = Object.keys(DEFAULTS);
+function collectState(){
+  const o={};
+  FIELD_IDS.forEach(id=>{ const el=$(id); if(el) o[id]=readNum(el); });
+  o.guard = $("guard").checked; o.retireNow = $("retireNow").checked;
+  return o;
+}
+function applyState(o){
+  const nums={}; FIELD_IDS.forEach(id=>{ if(id in o) nums[id]=o[id]; });
+  setInputs(nums);
+  $("guard").checked = !!o.guard;
+  $("retireNow").checked = !!o.retireNow;
+  $("retireAge").disabled = !!o.retireNow;
+  $("retireAge").style.opacity = o.retireNow ? .45 : 1;
+}
+let toastT;
+function flash(msg, warn){
+  const t=$("toast"); t.textContent=msg; t.style.color = warn ? "var(--brick)" : "var(--sage)";
+  t.classList.add("show"); clearTimeout(toastT);
+  toastT=setTimeout(()=>t.classList.remove("show"), 2200);
+}
+function saveLocal(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(collectState())); flash("Saved on this device"); }
+  catch(e){ flash("Saving isn't available here — try the hosted page", true); }
+}
+function shareLink(){
+  try{
+    const code = btoa(unescape(encodeURIComponent(JSON.stringify(collectState()))));
+    const url = location.origin + location.pathname + "#" + code;
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(url).then(()=>flash("Link copied to clipboard"),
+                                              ()=>window.prompt("Copy this link:", url));
+    } else window.prompt("Copy this link:", url);
+  }catch(e){ flash("Couldn't build a link here", true); }
+}
+$("saveBtn").addEventListener("click", saveLocal);
+$("shareBtn").addEventListener("click", shareLink);
+
 let rT;
 window.addEventListener("resize", ()=>{ if(!lastSim) return;
   clearTimeout(rT); rT=setTimeout(()=>{ drawFan(lastSim); drawHist(lastSim); },150); });
 
-// boot
-setInputs(DEFAULTS);
-run();
+// boot: shared link (#hash) wins, then a saved local copy, else blank defaults
+(function boot(){
+  let loaded=false;
+  if(location.hash.length>1){
+    try{ applyState(JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(1)))))); loaded=true; }
+    catch(e){}
+  }
+  if(!loaded){
+    try{ const s=localStorage.getItem(STORE_KEY); if(s){ applyState(JSON.parse(s)); loaded=true; } }
+    catch(e){}
+  }
+  if(!loaded) setInputs(DEFAULTS);
+  run();
+})();
 </script>
 </body>
 </html>
