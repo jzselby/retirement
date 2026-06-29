@@ -99,6 +99,12 @@
   details.adv summary::before{content:"▸  ";color:var(--terrazzo)}
   details.adv[open] summary::before{content:"▾  "}
   details.adv .field:first-of-type{margin-top:10px}
+  .preset-row{display:flex;gap:8px;margin:11px 0 4px}
+  .preset{flex:1;font-family:var(--sans);font-size:12.5px;padding:7px 6px;border:1px solid var(--nickel-dk);
+    background:var(--card);color:var(--ink-soft);border-radius:5px;cursor:pointer}
+  .preset.on{background:var(--terrazzo);color:#fff;border-color:var(--terrazzo);font-weight:600}
+  .preset:focus-visible{outline:3px solid var(--terrazzo-fog);outline-offset:2px}
+  .preset-note{font-size:11px;color:var(--ink-soft);margin-bottom:6px;line-height:1.4}
 
   .modebar{display:flex;align-items:center;gap:8px;margin-bottom:16px}
   .modebar .modelabel{font-family:var(--mono);font-size:11px;letter-spacing:.1em;
@@ -147,6 +153,7 @@
   .chart-card{background:var(--card);border:1px solid var(--nickel);border-radius:8px;
     padding:18px 20px 14px;margin-top:18px}
   .chart-card h3{font-family:var(--serif);font-size:17px;font-weight:600;margin:0 0 2px}
+  .solver-card{border-left:6px solid var(--terrazzo)}
   .chart-card .sub{font-size:12.5px;color:var(--ink-soft);margin:0 0 12px}
   canvas{display:block;width:100%}
   .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:10px;font-size:12px;color:var(--ink-soft)}
@@ -259,6 +266,11 @@
       <div class="blend" id="blendOut"></div>
       <details class="adv">
         <summary>Capital-market assumptions</summary>
+        <div class="preset-row">
+          <button type="button" class="preset" data-cma="historical">Historical</button>
+          <button type="button" class="preset" data-cma="forward">Forward-looking</button>
+        </div>
+        <div class="preset-note">Historical ≈ century-long averages · Forward-looking ≈ today's valuations (lower). Edit any field for a custom view.</div>
         <div class="field"><label>Stock return<span class="hint">nominal, long-run</span></label><span class="suffix" data-suffix="%"><input id="stockRet" data-pct></span></div>
         <div class="field"><label>Stock volatility</label><span class="suffix" data-suffix="%"><input id="stockVol" data-pct></span></div>
         <div class="field"><label>Bond return<span class="hint">nominal</span></label><span class="suffix" data-suffix="%"><input id="bondRet" data-pct></span></div>
@@ -351,6 +363,31 @@ function updateBlend(){
   $("bondPctLbl").textContent = Math.round(b.wB*100) + "%";
   $("blendOut").innerHTML = `Blended: <strong>${(b.mean*100).toFixed(1)}%</strong> nominal · ` +
     `<strong>${(real*100).toFixed(1)}%</strong> real · ${(b.vol*100).toFixed(1)}% volatility`;
+  detectPreset();
+}
+
+/* ---------- Capital-market presets ---------- */
+const CMA_PRESETS = {
+  historical: { stockRet:9.5, stockVol:16, bondRet:4.5, bondVol:5, corr:0.1 },
+  forward:    { stockRet:6.5, stockVol:17, bondRet:4.5, bondVol:6, corr:0.2 }
+};
+function setActivePreset(name){
+  document.querySelectorAll(".preset").forEach(b=>b.classList.toggle("on", b.dataset.cma===name));
+}
+function detectPreset(){
+  const cur = { stockRet:readNum($("stockRet")), stockVol:readNum($("stockVol")),
+                bondRet:readNum($("bondRet")), bondVol:readNum($("bondVol")), corr:readNum($("corr")) };
+  let match = null;
+  for(const name in CMA_PRESETS){
+    const pr = CMA_PRESETS[name];
+    if(Object.keys(pr).every(k=>Math.abs(pr[k]-cur[k])<1e-9)){ match=name; break; }
+  }
+  setActivePreset(match);   // null => none highlighted (custom)
+}
+function applyPreset(name){
+  const pr = CMA_PRESETS[name]; if(!pr) return;
+  for(const k in pr) $(k).value = pr[k];
+  updateBlend(); run();
 }
 function readInputs(){
   const retireNow = $("retireNow").checked;
@@ -512,7 +549,8 @@ function runSim(p){
     medDepletion: depletionAges.length ? pctile(depletionAges,0.5) : null,
     finals: finalSorted,
     perYear,
-    hist: runHistorical(p, years)
+    hist: runHistorical(p, years),
+    solver: earliestRetirement(p, [0.80, 0.90, 0.95])
   };
 }
 
@@ -539,6 +577,35 @@ function runHistorical(p, years){
     p10: pctile(finalsReal,0.10), median: pctile(finalsReal,0.50), p90: pctile(finalsReal,0.90),
     startFirst: HIST_START, startLast: HIST_START+maxStartIdx
   };
+}
+
+/* ---------- Solver: earliest retirement age per confidence tier ----------
+   Success is monotonic in retirement age (working longer adds contributions and
+   removes risky early-withdrawal years), so scan upward and lock in the first age
+   that clears each target. Uses a reduced path count for speed. */
+function earliestRetirement(p, targets){
+  const SOLVER_SIMS = 3000;
+  const minAge = Math.max(1, p.zachAge), maxAge = p.planEnd - 1;
+  const years = p.planEnd - p.zachAge;
+  const constInfl = ()=>p.inflation;
+  const memo = {};
+  const successAt = age=>{
+    if(memo[age]!==undefined) return memo[age];
+    const pp = Object.assign({}, p, { retireAge:age });
+    const draw = makeReturnSampler(pp.mean, pp.vol);
+    let surv=0;
+    for(let s=0;s<SOLVER_SIMS;s++)
+      if(simulatePath(pp, years, draw, constInfl, null).depletedAge===null) surv++;
+    return memo[age] = surv/SOLVER_SIMS;
+  };
+  const sorted = targets.slice().sort((a,b)=>a-b);
+  const out = {}; let ti=0;
+  for(let age=minAge; age<=maxAge && ti<sorted.length; age++){
+    const s = successAt(age);
+    while(ti<sorted.length && s>=sorted[ti]){ out[sorted[ti]] = age; ti++; }
+  }
+  sorted.forEach(t=>{ if(out[t]===undefined) out[t]=null; });
+  return out;
 }
 
 /* ---------- Verdict bands ---------- */
@@ -603,6 +670,27 @@ function render(sim){
       <div class="stat"><div class="k">90th percentile</div><div class="v">${fmtM(p90)}</div></div>
       <div class="stat"><div class="k">Median depletion age</div><div class="v">${medDepletion?Math.round(medDepletion):"—"}</div></div>
     </div>
+
+    ${(()=>{
+      const sv=sim.solver; if(!sv) return '';
+      const a80=sv[0.80], a90=sv[0.90], a95=sv[0.95];
+      const fmtAge=a=> a===null ? '—' : (a<=p.zachAge ? `${a} (now)` : `${a}`);
+      let head;
+      if(a90!==null) head = `With these inputs you could retire as early as <strong>age ${a90}</strong> and still have about 90% confidence the money lasts to ${p.planEnd}.`;
+      else if(a80!==null) head = `You'd reach ~80% confidence at <strong>age ${a80}</strong>, but the plan doesn't hit 90% even by age ${p.planEnd-1} — lower spending, more saving, or a higher stock mix would close the gap.`;
+      else head = `Even working to age ${p.planEnd-1} the plan doesn't clear 80% confidence, so an age can't be pinned down yet. Adjust spending, savings, or return assumptions and re-run.`;
+      return `<div class="chart-card solver-card">
+        <h3>Earliest comfortable retirement</h3>
+        <p class="sub">Holding everything else fixed and varying only the retirement age, the earliest age the plan clears each Monte Carlo confidence level.</p>
+        <div class="stat-row" style="margin-top:4px">
+          <div class="stat"><div class="k">Workable · 80%</div><div class="v" style="font-size:17px">${fmtAge(a80)}</div></div>
+          <div class="stat"><div class="k">Comfortable · 90%</div><div class="v" style="font-size:17px;color:var(--sage)">${fmtAge(a90)}</div></div>
+          <div class="stat"><div class="k">Conservative · 95%</div><div class="v" style="font-size:17px">${fmtAge(a95)}</div></div>
+          <div class="stat"><div class="k">Your age ${p.retireAge} · success</div><div class="v">${(success*100).toFixed(0)}%</div></div>
+        </div>
+        <p class="sub" style="margin:11px 0 0">${head}</p>
+      </div>`;
+    })()}
 
     ${(()=>{
       const h=sim.hist;
@@ -873,6 +961,7 @@ function shareLink(){
 }
 $("saveBtn").addEventListener("click", saveLocal);
 $("shareBtn").addEventListener("click", shareLink);
+document.querySelectorAll(".preset").forEach(b=>b.addEventListener("click", ()=>applyPreset(b.dataset.cma)));
 
 let rT;
 window.addEventListener("resize", ()=>{ if(!lastSim) return;
