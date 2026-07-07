@@ -182,9 +182,12 @@
 <body>
 
 <header class="masthead">
-  <p class="eyebrow">Retirement planning · 10,000 simulated paths</p>
-  <h1>Retirement scenario modeling</h1>
-  <p></p>
+  <p class="eyebrow">Retirement planning</p>
+  <h1></h1>
+  <p>A simulation of your retirement: it draws a different random sequence of returns
+     for every path, grows spending and income with inflation, runs the two-account withdrawal
+     strategy year by year, and reports how often the portfolio lasts to the end of the plan.
+     Returns are nominal; flip the results between today's and future dollars.</p>
 </header>
 
 <div class="wrap">
@@ -526,31 +529,40 @@ function pctile(sorted, q){
 
 /* ---------- Run all paths ---------- */
 function runSim(p){
-  const drawReturn = makeReturnSampler(p.mean, p.vol);
-  const constInfl = ()=>p.inflation;
   const years = p.planEnd - p.zachAge;
+  const draw = makeReturnSampler(p.mean, p.vol);
+  // Pre-generate every return path once. The headline result and the age solver
+  // replay these SAME paths, so their success rates cannot drift apart.
+  const R = new Array(p.nsims);
+  for(let s=0;s<p.nsims;s++){
+    const row = new Float32Array(years+1);
+    for(let i=0;i<=years;i++) row[i] = draw();
+    R[s] = row;
+  }
+  const constInfl = ()=>p.inflation;
   const perYear = Array.from({length:years+1},()=>[]);
   const finals = new Float64Array(p.nsims);
   let survived = 0; const depletionAges = [];
 
   for(let s=0;s<p.nsims;s++){
-    const res = simulatePath(p, years, drawReturn, constInfl, perYear);
+    const row = R[s];
+    const res = simulatePath(p, years, i=>row[i], constInfl, perYear);
     finals[s] = res.finalNW;
     if(res.depletedAge === null) survived++;
     else depletionAges.push(res.depletedAge);
   }
+  const success = survived / p.nsims;
   const finalSorted = Array.from(finals).sort((a,b)=>a-b);
   perYear.forEach(a=>a.sort((x,y)=>x-y));
   depletionAges.sort((a,b)=>a-b);
 
   return {
-    p, years,
-    success: survived / p.nsims,
+    p, years, success,
     medDepletion: depletionAges.length ? pctile(depletionAges,0.5) : null,
     finals: finalSorted,
     perYear,
     hist: runHistorical(p, years),
-    solver: earliestRetirement(p, [0.80, 0.90, 0.95])
+    solver: earliestRetirement(p, [0.80, 0.90, 0.95], R, years, success)
   };
 }
 
@@ -580,27 +592,31 @@ function runHistorical(p, years){
 }
 
 /* ---------- Solver: earliest retirement age per confidence tier ----------
-   Success is monotonic in retirement age (working longer adds contributions and
-   removes risky early-withdrawal years), so scan upward and lock in the first age
-   that clears each target. Uses a reduced path count for speed. */
-function earliestRetirement(p, targets){
-  const SOLVER_SIMS = 3000;
-  const minAge = Math.max(1, p.zachAge), maxAge = p.planEnd - 1;
-  const years = p.planEnd - p.zachAge;
+   Replays the SAME pre-generated return paths at every candidate age (common
+   random numbers), so ages are judged against identical market luck and stay
+   consistent with the headline. A strided subset of paths is used for speed;
+   at the age actually entered, the full-path headline figure is used verbatim.
+   Success is monotonic in retirement age, so scan upward and lock in the first
+   age that clears each target. */
+function earliestRetirement(p, targets, R, years, headlineSuccess){
   const constInfl = ()=>p.inflation;
+  const stride = Math.max(1, Math.floor(R.length/4000));
+  const idxs = []; for(let s=0;s<R.length;s+=stride) idxs.push(s);
   const memo = {};
   const successAt = age=>{
     if(memo[age]!==undefined) return memo[age];
+    if(age===p.retireAge) return memo[age]=headlineSuccess;
     const pp = Object.assign({}, p, { retireAge:age });
-    const draw = makeReturnSampler(pp.mean, pp.vol);
     let surv=0;
-    for(let s=0;s<SOLVER_SIMS;s++)
-      if(simulatePath(pp, years, draw, constInfl, null).depletedAge===null) surv++;
-    return memo[age] = surv/SOLVER_SIMS;
+    for(const s of idxs){
+      const row = R[s];
+      if(simulatePath(pp, years, i=>row[i], constInfl, null).depletedAge===null) surv++;
+    }
+    return memo[age] = surv/idxs.length;
   };
   const sorted = targets.slice().sort((a,b)=>a-b);
   const out = {}; let ti=0;
-  for(let age=minAge; age<=maxAge && ti<sorted.length; age++){
+  for(let age=Math.max(1,p.zachAge); age<=p.planEnd-1 && ti<sorted.length; age++){
     const s = successAt(age);
     while(ti<sorted.length && s>=sorted[ti]){ out[sorted[ti]] = age; ti++; }
   }
@@ -681,7 +697,7 @@ function render(sim){
       else head = `Even working to age ${p.planEnd-1} the plan doesn't clear 80% confidence, so an age can't be pinned down yet. Adjust spending, savings, or return assumptions and re-run.`;
       return `<div class="chart-card solver-card">
         <h3>Earliest comfortable retirement</h3>
-        <p class="sub">Holding everything else fixed and varying only the retirement age, the earliest age the plan clears each Monte Carlo confidence level.</p>
+        <p class="sub">Holding everything else fixed and varying only the retirement age, the earliest age the plan clears each Monte Carlo confidence level. Every candidate age is tested against the same simulated market paths as the headline result, so these figures always line up.</p>
         <div class="stat-row" style="margin-top:4px">
           <div class="stat"><div class="k">Workable · 80%</div><div class="v" style="font-size:17px">${fmtAge(a80)}</div></div>
           <div class="stat"><div class="k">Comfortable · 90%</div><div class="v" style="font-size:17px;color:var(--sage)">${fmtAge(a90)}</div></div>
