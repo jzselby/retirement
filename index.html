@@ -154,6 +154,9 @@
     padding:18px 20px 14px;margin-top:18px}
   .chart-card h3{font-family:var(--serif);font-size:17px;font-weight:600;margin:0 0 2px}
   .solver-card{border-left:6px solid var(--terrazzo)}
+  .sens-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:4px}
+  @media(max-width:680px){.sens-row{grid-template-columns:repeat(2,1fr)}}
+  .sens-row .stat.base{border-color:var(--terrazzo);box-shadow:inset 0 0 0 1px var(--terrazzo)}
   .chart-card .sub{font-size:12.5px;color:var(--ink-soft);margin:0 0 12px}
   canvas{display:block;width:100%}
   .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:10px;font-size:12px;color:var(--ink-soft)}
@@ -562,7 +565,8 @@ function runSim(p){
     finals: finalSorted,
     perYear,
     hist: runHistorical(p, years),
-    solver: earliestRetirement(p, [0.80, 0.90, 0.95], R, years, success)
+    solver: earliestRetirement(p, [0.80, 0.90, 0.95], R, years, success),
+    sens: returnSensitivity(p, R, years, success)
   };
 }
 
@@ -622,6 +626,28 @@ function earliestRetirement(p, targets, R, years, headlineSuccess){
   }
   sorted.forEach(t=>{ if(out[t]===undefined) out[t]=null; });
   return out;
+}
+
+/* ---------- Sensitivity: success at return offsets from the selected mean ----------
+   Each stored path's growth factors are rescaled by (1+mean+delta)/(1+mean), which
+   shifts the mean by delta while reusing the SAME random paths (common random
+   numbers) — so differences across the row reflect only the return assumption. */
+function returnSensitivity(p, R, years, headlineSuccess){
+  const deltas = [-0.02, -0.01, 0, 0.01, 0.02];
+  const constInfl = ()=>p.inflation;
+  const stride = Math.max(1, Math.floor(R.length/4000));
+  const idxs = []; for(let s=0;s<R.length;s+=stride) idxs.push(s);
+  return deltas.map(d=>{
+    if(d===0) return { d, mean:p.mean, success:headlineSuccess };
+    const scale = (1+p.mean+d)/(1+p.mean);
+    let surv=0;
+    for(const s of idxs){
+      const row = R[s];
+      const getRet = i => (1+row[i])*scale - 1;
+      if(simulatePath(p, years, getRet, constInfl, null).depletedAge===null) surv++;
+    }
+    return { d, mean:p.mean+d, success:surv/idxs.length };
+  });
 }
 
 /* ---------- Verdict bands ---------- */
@@ -705,6 +731,30 @@ function render(sim){
           <div class="stat"><div class="k">Your age ${p.retireAge} · success</div><div class="v">${(success*100).toFixed(0)}%</div></div>
         </div>
         <p class="sub" style="margin:11px 0 0">${head}</p>
+      </div>`;
+    })()}
+
+    ${(()=>{
+      const sn=sim.sens; if(!sn) return '';
+      const real=m=>((1+m)/(1+p.inflation)-1)*100;
+      const tiles=sn.map(t=>{
+        const v=verdict(t.success);
+        const lbl = t.d===0 ? 'Selected' : (t.d>0?'+':'')+(t.d*100).toFixed(0)+'%';
+        return `<div class="stat ${t.d===0?'base':''}">
+          <div class="k">${lbl} · ${(t.mean*100).toFixed(1)}% nom</div>
+          <div class="v" style="color:${v.color}">${(t.success*100).toFixed(0)}%</div>
+          <div class="k" style="margin:4px 0 0">${real(t.mean).toFixed(1)}% real</div>
+        </div>`;
+      }).join('');
+      const worst=sn[0], swing=((sn[4].success-sn[0].success)*100).toFixed(0);
+      return `<div class="chart-card">
+        <h3>Return sensitivity</h3>
+        <p class="sub">The same plan and the same simulated paths, with the blended return shifted
+          down or up by 1–2 points — so the spread shows how much the result leans on the return assumption.</p>
+        <div class="sens-row">${tiles}</div>
+        <p class="sub" style="margin:11px 0 0">A 4-point return swing moves success by ${swing} points here.
+          If the −2% case (${(worst.mean*100).toFixed(1)}% nominal) still clears your comfort bar, the plan
+          isn't riding on an optimistic return guess.</p>
       </div>`;
     })()}
 
